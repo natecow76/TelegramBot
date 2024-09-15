@@ -1,4 +1,4 @@
-# bot.py
+# buybot.py
 
 import logging
 import os
@@ -10,6 +10,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     SuccessfulPayment,
+    LabeledPrice,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Load environment variables or set your keys here
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or 'YOUR_OPENAI_API_KEY'
-PAYMENT_PROVIDER_TOKEN = os.getenv('PAYMENT_PROVIDER_TOKEN') or 'YOUR_PAYMENT_PROVIDER_TOKEN'  # Stars Provider Token
+# Removed PAYMENT_PROVIDER_TOKEN as it's not needed for Stars
 
 # Check if API keys are set
 if not TELEGRAM_BOT_TOKEN:
@@ -49,10 +50,6 @@ if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY is not set.")
     exit(1)
 
-if not PAYMENT_PROVIDER_TOKEN:
-    logger.error("PAYMENT_PROVIDER_TOKEN is not set.")
-    exit(1)
-
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -61,22 +58,23 @@ database.initialize_database()
 
 # Define constants
 FREE_INTERACTIONS = 10
-STAR_COST_PER_INTERACTION = 1  # 1 star per interaction
+CREDIT_COST_PER_INTERACTION = 1  # 1 Indecent Credit per interaction
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message when the /start command is issued."""
     user_id = update.effective_user.id
     user = database.get_user(user_id)
-    stars_remaining = user['stars']
     free_left = max(FREE_INTERACTIONS - user['free_interactions_used'], 0)
+    indecent_credits = user['stars']
 
     welcome_text = (
         f"Hello! I'm ChatGPT Bot.\n\n"
         f"You have {free_left} free interactions left.\n"
-        f"You currently have {stars_remaining} stars.\n\n"
+        f"You currently have {indecent_credits} Indecent Credits.\n\n"
         f"Use /audio to toggle audio responses on/off.\n"
-        f"Use /buy to purchase additional stars.\n"
-        f"Use /balance to check your current balance."
+        f"Use /buy to purchase additional Indecent Credits.\n"
+        f"Use /balance to check your current balance.\n\n"
+        f"**Note:** 1 Indecent Credit equals 1 Star in Telegram."
     )
     await update.message.reply_text(welcome_text)
     logger.debug(f"Sent welcome message to user {user_id}.")
@@ -88,8 +86,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start - Welcome message\n"
         "/help - This help message\n"
         "/audio - Toggle audio responses on/off\n"
-        "/buy - Purchase additional stars\n"
-        "/balance - Check your current stars and free interactions\n\n"
+        "/buy - Purchase additional Indecent Credits\n"
+        "/balance - Check your current balance\n\n"
         "By default, I reply with text. Use /audio to receive voice messages."
     )
     await update.message.reply_text(help_text)
@@ -105,15 +103,17 @@ async def toggle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.debug(f"Audio responses have been {status} for user {update.effective_user.id}.")
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display the user's current star balance and free interactions left."""
+    """Display the user's current Indecent Credit balance and free interactions left."""
     user_id = update.effective_user.id
     user = database.get_user(user_id)
-    stars_remaining = user['stars']
     free_left = max(FREE_INTERACTIONS - user['free_interactions_used'], 0)
 
+    indecent_credits = user['stars'] + free_left
+
+
     balance_text = (
-        f"You have {free_left} free interactions left.\n"
-        f"You currently have {stars_remaining} stars."
+        #f"You have {free_left} free interactions left.\n"
+        f"You currently have {indecent_credits} Indecent Credits."
     )
     await update.message.reply_text(balance_text)
     logger.debug(f"Displayed balance to user {user_id}.")
@@ -154,25 +154,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         database.increment_free_interactions(user_id)
         logger.debug(f"User {user_id} has free interactions remaining.")
     else:
-        # Check if user has enough stars
-        if user['stars'] >= STAR_COST_PER_INTERACTION:
-            # Consume stars
+        # Check if user has enough Indecent Credits
+        if user['stars'] >= CREDIT_COST_PER_INTERACTION:
+            # Consume Indecent Credits
             success = database.consume_star(user_id)
             if not success:
-                await update.message.reply_text("An error occurred while consuming a star. Please try again.")
+                await update.message.reply_text("An error occurred while consuming an Indecent Credit. Please try again.")
                 return
-            logger.debug(f"User {user_id} consumed {STAR_COST_PER_INTERACTION} star(s). Remaining stars: {user['stars'] - STAR_COST_PER_INTERACTION}")
+            logger.debug(f"User {user_id} consumed {CREDIT_COST_PER_INTERACTION} Indecent Credit(s). Remaining credits: {user['stars'] - CREDIT_COST_PER_INTERACTION}")
         else:
-            # User has no stars left, prompt to buy more
+            # User has no Indecent Credits left, prompt to buy more
             keyboard = [
-                [InlineKeyboardButton("Buy Stars", callback_data='buy_stars')]
+                [InlineKeyboardButton("Buy Indecent Credits", callback_data='buy_credits')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                "You have used all your free interactions and no stars left. Please purchase more stars to continue.",
+                "You have used all your free interactions and no Indecent Credits left. Please purchase more Indecent Credits to continue.",
                 reply_markup=reply_markup
             )
-            logger.debug(f"User {user_id} has no stars left. Prompted to buy stars.")
+            logger.debug(f"User {user_id} has no Indecent Credits left. Prompted to buy credits.")
             return
 
     # Generate response from OpenAI
@@ -207,38 +207,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.debug(f"Sent text response chunk to user {user_id}.")
 
 async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Initiate the purchase process for additional stars."""
-    keyboard = [
-        [InlineKeyboardButton("Buy Stars", callback_data='buy_stars')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Click the button below to purchase stars:", reply_markup=reply_markup)
-    logger.debug(f"User {update.effective_user.id} initiated purchase.")
+    """Initiate the purchase process for additional Indecent Credits by presenting credit packages directly."""
+    user_id = update.effective_user.id
+    logger.debug(f"User {user_id} initiated purchase.")
 
-async def handle_buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the Buy Stars button press and present star package options."""
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    logger.debug(f"User {user_id} clicked the Buy Stars button.")
-
-    # Define star packages
-    star_packages = {
-        'purchase_10_stars': {'stars': 10, 'price': 100},    # 10 stars for 100 cents ($1.00)
-        'purchase_50_stars': {'stars': 50, 'price': 500},    # 50 stars for 500 cents ($5.00)
-        'purchase_100_stars': {'stars': 100, 'price': 1000}, # 100 stars for 1000 cents ($10.00)
+    # Define Indecent Credit packages without referencing currency
+    credit_packages = {
+        'purchase_50_credits': {'credits': 50},
+        'purchase_100_credits': {'credits': 100},
+        'purchase_500_credits': {'credits': 500},
+        'purchase_1000_credits': {'credits': 1000},
     }
 
-    # Present star package options
+    # Present credit package options directly
     keyboard = [
-        [InlineKeyboardButton("10 Stars - $1.00", callback_data='purchase_10_stars')],
-        [InlineKeyboardButton("50 Stars - $5.00", callback_data='purchase_50_stars')],
-        [InlineKeyboardButton("100 Stars - $10.00", callback_data='purchase_100_stars')],
+        [InlineKeyboardButton("50 Indecent Credits", callback_data='purchase_50_credits')],
+        [InlineKeyboardButton("100 Indecent Credits", callback_data='purchase_100_credits')],
+        [InlineKeyboardButton("500 Indecent Credits", callback_data='purchase_500_credits')],
+        [InlineKeyboardButton("1000 Indecent Credits", callback_data='purchase_1000_credits')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Select the number of stars you want to purchase:", reply_markup=reply_markup)
-    logger.debug(f"User {user_id} selected a star package.")
+    await update.message.reply_text(
+        "Select the number of Indecent Credits you want to purchase:",
+        reply_markup=reply_markup
+    )
+    logger.debug(f"User {user_id} presented with credit package options.")
 
 async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process the purchase button and send the invoice."""
@@ -248,46 +241,48 @@ async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_
     user_id = query.from_user.id
     data = query.data
 
-    # Determine the number of stars based on the button pressed
-    if data == 'purchase_10_stars':
-        stars = 10
-        amount = 100  # Amount in cents ($1.00)
-    elif data == 'purchase_50_stars':
-        stars = 50
-        amount = 500  # $5.00
-    elif data == 'purchase_100_stars':
-        stars = 100
-        amount = 1000  # $10.00
+    # Determine the number of Indecent Credits based on the button pressed
+    if data == 'purchase_50_credits':
+        credits = 50
+    elif data == 'purchase_100_credits':
+        credits = 100
+    elif data == 'purchase_500_credits':
+        credits = 500
+    elif data == 'purchase_1000_credits':
+        credits = 1000
     else:
         await query.edit_message_text(text="Invalid selection.")
         logger.warning(f"User {user_id} made an invalid purchase selection: {data}")
         return
 
+    # Calculate the amount in the smallest currency units (1 Indecent Credit = 1 XTR = 100 units)
+    amount = credits #* 100  # 1 Indecent Credit = 1 XTR = 100 units
+
     # Create an invoice payload
-    payload = f"purchase_{stars}_stars"
+    payload = f"purchase_{credits}_credits"
+
+    # Define the price using LabeledPrice
+    prices = [LabeledPrice(label=f"{credits} Indecent Credits", amount=amount)]
 
     # Send the invoice using Telegram Stars
     try:
         await context.bot.send_invoice(
             chat_id=user_id,
-            title=f"Purchase {stars} Stars",
-            description=f"Get {stars} stars for ${amount / 100:.2f}.",
+            title=f"Purchase {credits} Indecent Credits",
+            description=f"Get {credits} Indecent Credits.",
             payload=payload,
-            provider_token=PAYMENT_PROVIDER_TOKEN,  # Telegram Stars provider token
-            currency="USD",
-            prices=[{
-                'label': f"{stars} Stars",
-                'amount': amount  # amount in cents
-            }],
-            start_parameter=f"buy_{stars}_stars",
-            need_name=True,
+            provider_token="",      # Empty token for digital goods (Stars)
+            currency="XTR",         # Telegram Stars currency code
+            prices=prices,
+            start_parameter=f"buy_{credits}_credits",
+            need_name=False,        # Stars payments typically don't require user info
             need_phone_number=False,
             need_email=False,
             is_flexible=False,
         )
-        logger.debug(f"Sent invoice to user {user_id} for {stars} stars.")
+        logger.debug(f"Sent invoice to user {user_id} for {credits} Indecent Credits.")
     except Exception as e:
-        logger.exception(f"Error sending invoice to user {user_id}.")
+        logger.exception(f"Error sending invoice to user {user_id}: {e}")
         await query.edit_message_text(text="Sorry, an error occurred while processing your purchase. Please try again later.")
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -295,13 +290,18 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.pre_checkout_query
     logger.debug(f"Received PreCheckoutQuery from user {query.from_user.id}: {query.invoice_payload}")
 
-    # Here, you can perform any necessary checks before confirming the payment
-    # For simplicity, we'll approve all pre-checkouts
+    # Verify the payload format
+    if not (query.invoice_payload.startswith("purchase_") and query.invoice_payload.endswith("_credits")):
+        await query.answer(ok=False, error_message="Invalid purchase payload.")
+        logger.warning(f"User {query.from_user.id} sent an invalid payload: {query.invoice_payload}")
+        return
+
+    # Approve the pre-checkout query
     try:
         await query.answer(ok=True)
         logger.debug(f"PreCheckoutQuery approved for user {query.from_user.id}.")
     except Exception as e:
-        logger.exception(f"Error answering PreCheckoutQuery for user {query.from_user.id}.")
+        logger.exception(f"Error answering PreCheckoutQuery for user {query.from_user.id}: {e}")
         await query.answer(ok=False, error_message="An error occurred. Please try again.")
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -311,15 +311,15 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     user_id = message.from_user.id
     logger.debug(f"Received successful payment from user {user_id}: {successful_payment}")
 
-    # Extract the payload to determine the number of stars purchased
+    # Extract the payload to determine the number of Indecent Credits purchased
     payload = successful_payment.invoice_payload
-    # Assuming payload is in the format "purchase_{stars}_stars"
-    if payload.startswith("purchase_") and payload.endswith("_stars"):
+    # Assuming payload is in the format "purchase_{credits}_credits"
+    if payload.startswith("purchase_") and payload.endswith("_credits"):
         try:
-            stars_purchased = int(payload.split('_')[1])
-            database.add_stars(user_id, stars_purchased)
-            await message.reply_text(f"Thank you for your purchase! You have been credited with {stars_purchased} stars.")
-            logger.debug(f"User {user_id} purchased {stars_purchased} stars.")
+            credits_purchased = int(payload.split('_')[1])
+            database.add_stars(user_id, credits_purchased)
+            await message.reply_text(f"Thank you for your purchase! You have been credited with {credits_purchased} Indecent Credits.")
+            logger.debug(f"User {user_id} purchased {credits_purchased} Indecent Credits.")
         except ValueError:
             await message.reply_text("Payment received, but could not determine the purchase details.")
             logger.warning(f"User {user_id} sent a payment with invalid payload: {payload}")
@@ -338,8 +338,8 @@ def main() -> None:
     application.add_handler(CommandHandler("buy", buy))
     application.add_handler(CommandHandler("balance", balance))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(handle_buy_button, pattern='^buy_stars$'))
-    application.add_handler(CallbackQueryHandler(process_purchase_button, pattern='^purchase_\d+_stars$'))
+    # Removed the CallbackQueryHandler for 'buy_stars' as it's no longer needed
+    application.add_handler(CallbackQueryHandler(process_purchase_button, pattern='^purchase_\d+_credits$'))
     application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
 
