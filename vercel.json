@@ -1,14 +1,14 @@
 {
   "builds": [
     {
-      "src": "IndecentBot.py",
+      "src": "telegramBot.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "IndecentBot.py"
+      "dest": "telegramBot.py"
     }
   ]
 }
