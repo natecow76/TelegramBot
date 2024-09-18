@@ -1,12 +1,10 @@
 # telegramBot.py
 
-# to do: 
-#  - Chunk at the end of a sentence. 
+# to do:
+#  - Chunk at the end of a sentence.
 #  - Add button to direct user to pay for more credits when they run out of free ones. (Fix)
-#  - Charge more for audio. $1/minute? 
+#  - Charge more for audio.
 #  - Swap out LLM
-#  - Swap out TTS engine 
-#  - Host it somewhere
 
 import logging
 import os
@@ -32,9 +30,12 @@ from telegram.ext import (
     filters,
 )
 from openai import OpenAI
-from gtts import gTTS
 from dotenv import load_dotenv
 import database
+
+# Import ElevenLabs
+from elevenlabs import VoiceSettings
+from elevenlabs.client import ElevenLabs
 
 # Load environment variables from .env file
 load_dotenv()
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 # Load environment variables or set your keys here
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or 'YOUR_OPENAI_API_KEY'
+ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY') or 'YOUR_ELEVENLABS_API_KEY'
 # Removed PAYMENT_PROVIDER_TOKEN as it's not needed for Stars
 
 # Check if API keys are set
@@ -60,15 +62,22 @@ if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY is not set.")
     exit(1)
 
+if not ELEVENLABS_API_KEY:
+    logger.error("ELEVENLABS_API_KEY is not set.")
+    exit(1)
+
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize ElevenLabs client
+elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 # Initialize the database
 database.initialize_database()
 
 # Define constants
 FREE_INTERACTIONS = 10
-CREDIT_COST_PER_INTERACTION = 1  # 1 Indecent Credit per interaction
+CREDIT_COST_PER_INTERACTION = 1  # 1 Credit per interaction
 
 # Define the custom menu keyboard
 def get_main_menu_keyboard():
@@ -92,9 +101,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         indecent_credits = user['indecent_credits']
 
         welcome_text = (
-            f"Hello {update.effective_user.first_name}! Are you ready for some exciting stories? \n\n"
+            f"Hello {update.effective_user.first_name}! I'm Greg, an AI from Indecent. Are you ready to hear something indecent? 😈😈 \n\n"
             f"You have {free_left} free interactions left.\n"
-            f"You currently have {indecent_credits} Credits.\n\n"
+            f"You currently have {indecent_credits} Indecent Credits.\n\n"
             f"Use the menu below to navigate through my features."
         )
 
@@ -112,7 +121,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/start - Welcome message with main menu\n"
             "/help - This help message\n"
             "/audio - Toggle audio responses on/off\n"
-            "/buy - Purchase additional Credits\n"
+            "/buy - Purchase additional Indecent Credits\n"
             "/balance - Check your current balance\n\n"
             "By default, I reply with text. Use /audio to receive voice messages."
         )
@@ -136,7 +145,7 @@ async def toggle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("An unexpected error occurred while toggling audio.", reply_markup=get_main_menu_keyboard())
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display the user's current Credit balance and free interactions left."""
+    """Display the user's current Indecent Credit balance and free interactions left."""
     try:
         user_id = update.effective_user.id
         user = database.get_user(user_id)
@@ -145,7 +154,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         balance_text = (
             f"You have {free_left} free interactions left.\n"
-            f"You currently have {indecent_credits} Credits."
+            f"You currently have {indecent_credits} Indecent Credits."
         )
         await update.message.reply_text(balance_text, reply_markup=get_main_menu_keyboard())
         logger.debug(f"Displayed balance to user {user_id}.")
@@ -163,7 +172,7 @@ def generate_openai_response(user_id: int, user_text: str) -> str:
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": user_text}
             ],
-            max_tokens=5000, #for longer stories. 
+            max_tokens=5000,  # for longer stories.
             temperature=0.7,
         )
         # Extract and return the assistant's reply
@@ -173,6 +182,43 @@ def generate_openai_response(user_id: int, user_text: str) -> str:
     except Exception as e:
         logger.exception(f"Error communicating with OpenAI API for user {user_id}: {e}")
         return "Sorry, I couldn't process that."
+
+def text_to_speech_stream(text: str) -> BytesIO:
+    """
+    Converts text to speech using ElevenLabs and returns the audio data as a byte stream.
+    """
+    try:
+        # Perform the text-to-speech conversion
+        response = elevenlabs_client.text_to_speech.convert(
+            voice_id="nsQAxyXwUKBvqtEK9MfK",  # Adam pre-made voice
+            optimize_streaming_latency="0",
+            output_format="mp3_22050_32",
+            text=text,
+            model_id="eleven_multilingual_v2",
+            voice_settings=VoiceSettings(
+                stability=0.0,
+                similarity_boost=1.0,
+                style=0.0,
+                use_speaker_boost=True,
+            ),
+        )
+
+        # Create a BytesIO object to hold audio data
+        audio_stream = BytesIO()
+
+        # Write each chunk of audio data to the stream
+        for chunk in response:
+            if chunk:
+                audio_stream.write(chunk)
+
+        # Reset stream position to the beginning
+        audio_stream.seek(0)
+
+        # Return the stream for further use
+        return audio_stream
+    except Exception as e:
+        logger.exception(f"Error in text_to_speech_stream: {e}")
+        return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages and respond via OpenAI ChatCompletion API."""
@@ -195,20 +241,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 # Consume Indecent Credits
                 success = database.consume_credit(user_id)
                 if not success:
-                    await update.message.reply_text("An error occurred while consuming a Credit. Please try again.", reply_markup=get_main_menu_keyboard())
+                    await update.message.reply_text("An error occurred while consuming an Indecent Credit. Please try again.", reply_markup=get_main_menu_keyboard())
                     return
-                logger.debug(f"User {user_id} consumed {CREDIT_COST_PER_INTERACTION} Credit(s). Remaining credits: {user['indecent_credits'] - CREDIT_COST_PER_INTERACTION}")
+                logger.debug(f"User {user_id} consumed {CREDIT_COST_PER_INTERACTION} Indecent Credit(s). Remaining credits: {user['indecent_credits'] - CREDIT_COST_PER_INTERACTION}")
             else:
                 # User has no Indecent Credits left, prompt to buy more
-                # This commented bit should have shown a button to buy more, but it wasn't working, so I cut it.
-                #keyboard = [
-                #    [InlineKeyboardButton("💰 Buy Indecent Credits", callback_data='buy_credits')]
-                #]
-                #reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
-                    "You have used all your free interactions and no Credits left. Please purchase more Credits to continue."
+                    "You have used all your free interactions and no Indecent Credits left. Please purchase more Indecent Credits to continue."
                 )
-                logger.debug(f"User {user_id} has no Credits left. Prompted to buy credits.")
+                logger.debug(f"User {user_id} has no Indecent Credits left. Prompted to buy credits.")
                 return
 
         # Generate response from OpenAI
@@ -226,14 +267,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Check if user has enabled audio responses
         if context.user_data.get('audio_enabled', False):
             try:
-                tts = gTTS(text=response_text, lang='en')
-                audio_bytes = BytesIO()
-                tts.write_to_fp(audio_bytes)
-                audio_bytes.seek(0)
+                # Use ElevenLabs for text-to-speech
+                audio_bytes = text_to_speech_stream(response_text)
+                if audio_bytes is None:
+                    raise Exception("Failed to generate audio stream.")
 
                 # Send the audio
                 await update.message.reply_voice(voice=audio_bytes)
-                logger.debug(f"Sent audio response to user {user_id}.")
+                logger.debug(f"Sent audio response to user {user_id} using ElevenLabs.")
             except Exception as e:
                 logger.exception(f"Error generating or sending audio response to user {user_id}: {e}")
                 await update.message.reply_text("Sorry, I couldn't generate an audio response.", reply_markup=get_main_menu_keyboard())
@@ -246,7 +287,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("An unexpected error occurred while processing your message.", reply_markup=get_main_menu_keyboard())
 
 async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Initiate the purchase process for additional Credits by presenting credit packages directly."""
+    """Initiate the purchase process for additional Indecent Credits by presenting credit packages directly."""
     try:
         user_id = update.effective_user.id
         logger.debug(f"User {user_id} initiated purchase.")
@@ -261,14 +302,14 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Present credit package options directly
         keyboard = [
-            [InlineKeyboardButton("💰 50 Credits", callback_data='purchase_50_credits')],
-            [InlineKeyboardButton("💰 100 Credits", callback_data='purchase_100_credits')],
-            [InlineKeyboardButton("💰 500 Credits", callback_data='purchase_500_credits')],
-            [InlineKeyboardButton("💰 1000 Credits", callback_data='purchase_1000_credits')],
+            [InlineKeyboardButton("💰 50 Indecent Credits", callback_data='purchase_50_credits')],
+            [InlineKeyboardButton("💰 100 Indecent Credits", callback_data='purchase_100_credits')],
+            [InlineKeyboardButton("💰 500 Indecent Credits", callback_data='purchase_500_credits')],
+            [InlineKeyboardButton("💰 1000 Indecent Credits", callback_data='purchase_1000_credits')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "Select the number of Credits you want to purchase:",
+            "Select the number of Indecent Credits you want to purchase:",
             reply_markup=reply_markup
         )
         logger.debug(f"User {user_id} presented with credit package options.")
@@ -306,14 +347,14 @@ async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_
         payload = f"purchase_{credits}_credits"
 
         # Define the price using LabeledPrice
-        prices = [LabeledPrice(label=f"{credits} Credits", amount=amount)]
+        prices = [LabeledPrice(label=f"{credits} Indecent Credits", amount=amount)]
 
         # Send the invoice using Telegram Stars
         try:
             await context.bot.send_invoice(
                 chat_id=user_id,
-                title=f"Purchase {credits} Credits",
-                description=f"Get {credits} Credits.",
+                title=f"Purchase {credits} Indecent Credits",
+                description=f"Get {credits} Indecent Credits.",
                 payload=payload,
                 provider_token="",      # Replace with your provider token if needed
                 currency="XTR",         # Telegram Stars currency code
@@ -324,7 +365,7 @@ async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_
                 need_email=False,
                 is_flexible=False,
             )
-            logger.debug(f"Sent invoice to user {user_id} for {credits} Credits.")
+            logger.debug(f"Sent invoice to user {user_id} for {credits} Indecent Credits.")
         except Exception as e:
             logger.exception(f"Error sending invoice to user {user_id}: {e}")
             await query.edit_message_text(text="Sorry, an error occurred while processing your purchase. Please try again later.")
@@ -369,8 +410,8 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
             try:
                 credits_purchased = int(payload.split('_')[1])
                 database.add_credits(user_id, credits_purchased)
-                await message.reply_text(f"Thank you for your purchase! You have been credited with {credits_purchased} Credits.", reply_markup=get_main_menu_keyboard())
-                logger.debug(f"User {user_id} purchased {credits_purchased} Credits.")
+                await message.reply_text(f"Thank you for your purchase! You have been credited with {credits_purchased} Indecent Credits.", reply_markup=get_main_menu_keyboard())
+                logger.debug(f"User {user_id} purchased {credits_purchased} Indecent Credits.")
             except ValueError:
                 await message.reply_text("Payment received, but could not determine the purchase details.", reply_markup=get_main_menu_keyboard())
                 logger.warning(f"User {user_id} sent a payment with invalid payload: {payload}")
