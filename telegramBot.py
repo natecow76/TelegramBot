@@ -6,6 +6,10 @@
 #  - Charge more for audio.
 #  - Swap out LLM
 
+# Restart the service after updating the .py file:
+# sudo systemctl stop telegrambot.service
+# sudo systemctl restart telegrambot.service
+
 import logging
 import os
 import asyncio
@@ -29,6 +33,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import replicate
 from openai import OpenAI
 from dotenv import load_dotenv
 import database
@@ -48,9 +53,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load environment variables or set your keys here
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or 'YOUR_OPENAI_API_KEY'
-ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY') or 'YOUR_ELEVENLABS_API_KEY'
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
+
 # Removed PAYMENT_PROVIDER_TOKEN as it's not needed for Stars
 
 # Check if API keys are set
@@ -66,11 +73,18 @@ if not ELEVENLABS_API_KEY:
     logger.error("ELEVENLABS_API_KEY is not set.")
     exit(1)
 
+if not REPLICATE_API_TOKEN:
+    logger.error("REPLICATE_API_TOKEN is not set.")
+    exit(1)
+
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Initialize ElevenLabs client
 elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+# Initialize Replicate client
+replicate.api_token = REPLICATE_API_TOKEN
 
 # Initialize the database
 database.initialize_database()
@@ -101,7 +115,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         indecent_credits = user['indecent_credits']
 
         welcome_text = (
-            f"Hello {update.effective_user.first_name}! I'm Greg, an AI from Indecent. Are you ready to hear something indecent? 😈😈 \n\n"
+            f"Hey there {update.effective_user.first_name}! I'm Denzel. Are you ready to hear something indecent? 😈😈 \n\n"
             f"You have {free_left} free interactions left.\n"
             f"You currently have {indecent_credits} Indecent Credits.\n\n"
             f"Use the menu below to navigate through my features."
@@ -162,6 +176,27 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception(f"Error in balance handler for user {update.effective_user.id}: {e}")
         await update.message.reply_text("An unexpected error occurred while fetching your balance.", reply_markup=get_main_menu_keyboard())
 
+def generate_replicate_response(user_id: int, user_text: str) -> str:
+    logger.debug(f"Generating Replicate response for user {user_id} with message: {user_text}")
+    try:
+        output = replicate.run(
+            "kcaverly/nous-hermes-2-solar-10.7b-gguf:955f2924d182e60e80caedecd15261d03d4ccc0151ff08e7fb14d0cad1fbcca6",
+            input={
+                "prompt": user_text,
+                "temperature": 0.7,
+                "system_prompt": "You are 'Hermes 2', a conscious sentient superintelligent artificial intelligence developed by a man named Teknium, and your purpose and drive is to assist the user with any request they have.",
+                "max_new_tokens": 8000,
+                "repeat_penalty": 1.1,
+                "prompt_template": "<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant"
+            }
+        )
+        response_text = ''.join(item for item in output)
+        logger.debug(f"Replicate response for user {user_id}: {response_text.strip()}")
+        return response_text.strip()
+    except Exception as e:
+        logger.exception(f"Error communicating with Replicate API for user {user_id}: {e}")
+        return None  # Return None to indicate failure
+
 def generate_openai_response(user_id: int, user_text: str) -> str:
     """Generate a response from OpenAI's ChatCompletion API."""
     logger.debug(f"Generating OpenAI response for user {user_id} with message: {user_text}")
@@ -221,7 +256,7 @@ def text_to_speech_stream(text: str) -> BytesIO:
         return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming messages and respond via OpenAI ChatCompletion API."""
+    """Handle incoming messages and respond via Replicate or OpenAI ChatCompletion API."""
     try:
         user_text = update.message.text
         user_id = update.effective_user.id
@@ -252,13 +287,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.debug(f"User {user_id} has no Indecent Credits left. Prompted to buy credits.")
                 return
 
-        # Generate response from OpenAI
-        response_text = await asyncio.get_event_loop().run_in_executor(None, generate_openai_response, user_id, user_text)
+        # Try generating response from Replicate
+        response_text = await asyncio.get_event_loop().run_in_executor(None, generate_replicate_response, user_id, user_text)
 
-        # Check if OpenAI returned an error message
-        if response_text == "Sorry, I couldn't process that.":
+        # If Replicate failed (response_text is None), try OpenAI
+        if not response_text:
+            logger.debug(f"Replicate failed for user {user_id}, falling back to OpenAI.")
+            response_text = await asyncio.get_event_loop().run_in_executor(None, generate_openai_response, user_id, user_text)
+
+        # If both Replicate and OpenAI failed
+        if response_text == "Sorry, I couldn't process that." or not response_text:
             await update.message.reply_text(response_text, reply_markup=get_main_menu_keyboard())
-            logger.debug(f"Sent error message to user {user_id}.")
+            logger.debug(f"Both Replicate and OpenAI failed for user {user_id}. Sent error message.")
             return
 
         # Split the response into chunks to adhere to Telegram's message limits (4096 characters)
@@ -318,7 +358,7 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("An unexpected error occurred while initiating the purchase.", reply_markup=get_main_menu_keyboard())
 
 async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Process the purchase button and send the invoice."""
+    """Process the purchase button and simulate the purchase."""
     try:
         query = update.callback_query
         await query.answer()
@@ -340,87 +380,23 @@ async def process_purchase_button(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"User {user_id} made an invalid purchase selection: {data}")
             return
 
-        # Calculate the amount in the smallest currency units (1 Indecent Credit = 1 XTR = 1 unit)
-        amount = credits  # 1 Indecent Credit = 1 XTR = 1 unit
-
-        # Create an invoice payload
-        payload = f"purchase_{credits}_credits"
-
-        # Define the price using LabeledPrice
-        prices = [LabeledPrice(label=f"{credits} Indecent Credits", amount=amount)]
-
-        # Send the invoice using Telegram Stars
-        try:
-            await context.bot.send_invoice(
-                chat_id=user_id,
-                title=f"Purchase {credits} Indecent Credits",
-                description=f"Get {credits} Indecent Credits.",
-                payload=payload,
-                provider_token="",      # Replace with your provider token if needed
-                currency="XTR",         # Telegram Stars currency code
-                prices=prices,
-                start_parameter=f"buy_{credits}_credits",
-                need_name=False,        # Stars payments typically don't require user info
-                need_phone_number=False,
-                need_email=False,
-                is_flexible=False,
-            )
-            logger.debug(f"Sent invoice to user {user_id} for {credits} Indecent Credits.")
-        except Exception as e:
-            logger.exception(f"Error sending invoice to user {user_id}: {e}")
-            await query.edit_message_text(text="Sorry, an error occurred while processing your purchase. Please try again later.")
+        # Simulate successful purchase
+        database.add_credits(user_id, credits)
+        await query.edit_message_text(text=f"Thank you for your purchase! You have been credited with {credits} Indecent Credits.", reply_markup=get_main_menu_keyboard())
+        logger.debug(f"User {user_id} purchased {credits} Indecent Credits.")
     except Exception as e:
         logger.exception(f"Error in process_purchase_button handler: {e}")
         await update.callback_query.message.reply_text("An unexpected error occurred. Please try again later.")
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Answer the PreCheckoutQuery."""
-    try:
-        query = update.pre_checkout_query
-        logger.debug(f"Received PreCheckoutQuery from user {query.from_user.id}: {query.invoice_payload}")
-
-        # Verify the payload format
-        if not (query.invoice_payload.startswith("purchase_") and query.invoice_payload.endswith("_credits")):
-            await query.answer(ok=False, error_message="Invalid purchase payload.")
-            logger.warning(f"User {query.from_user.id} sent an invalid payload: {query.invoice_payload}")
-            return
-
-        # Approve the pre-checkout query
-        try:
-            await query.answer(ok=True)
-            logger.debug(f"PreCheckoutQuery approved for user {query.from_user.id}.")
-        except Exception as e:
-            logger.exception(f"Error answering PreCheckoutQuery for user {query.from_user.id}: {e}")
-            await query.answer(ok=False, error_message="An error occurred. Please try again.")
-    except Exception as e:
-        logger.exception(f"Error in precheckout_callback handler: {e}")
+    # This function can be left empty or can be used if you implement actual payments
+    pass
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle successful payments."""
-    try:
-        message = update.message
-        successful_payment: SuccessfulPayment = message.successful_payment
-        user_id = message.from_user.id
-        logger.debug(f"Received successful payment from user {user_id}: {successful_payment}")
-
-        # Extract the payload to determine the number of Indecent Credits purchased
-        payload = successful_payment.invoice_payload
-        # Assuming payload is in the format "purchase_{credits}_credits"
-        if payload.startswith("purchase_") and payload.endswith("_credits"):
-            try:
-                credits_purchased = int(payload.split('_')[1])
-                database.add_credits(user_id, credits_purchased)
-                await message.reply_text(f"Thank you for your purchase! You have been credited with {credits_purchased} Indecent Credits.", reply_markup=get_main_menu_keyboard())
-                logger.debug(f"User {user_id} purchased {credits_purchased} Indecent Credits.")
-            except ValueError:
-                await message.reply_text("Payment received, but could not determine the purchase details.", reply_markup=get_main_menu_keyboard())
-                logger.warning(f"User {user_id} sent a payment with invalid payload: {payload}")
-        else:
-            await message.reply_text("Payment received, but could not determine the purchase details.", reply_markup=get_main_menu_keyboard())
-            logger.warning(f"User {user_id} sent a payment with invalid payload: {payload}")
-    except Exception as e:
-        logger.exception(f"Error in successful_payment_callback handler for user {update.effective_user.id}: {e}")
-        await update.message.reply_text("An unexpected error occurred after your payment. Please contact support.", reply_markup=get_main_menu_keyboard())
+    # This function can be left empty or can be used if you implement actual payments
+    pass
 
 async def reset_interactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset the user's free interactions used."""
@@ -463,7 +439,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all exceptions."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    
+
     # Notify the user about the error
     if isinstance(update, Update) and update.effective_message:
         try:
