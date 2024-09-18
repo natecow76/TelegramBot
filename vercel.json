@@ -1,0 +1,14 @@
+{
+  "builds": [
+    {
+      "src": "IndecentBot.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "IndecentBot.py"
+    }
+  ]
+}
